@@ -1,13 +1,13 @@
 #include "classifier.hpp"
 
-#include "tools/yaml.hpp"
+#include <yaml-cpp/yaml.h>
 
 namespace auto_aim
 {
 Classifier::Classifier(const std::string & config_path)
 {
-  auto yaml = tools::load(config_path);
-  auto model = tools::read_path(yaml, "classify_model");
+  auto yaml = YAML::LoadFile(config_path);
+  auto model = yaml["classify_model"].as<std::string>();
   net_ = cv::dnn::readNetFromONNX(model);
   auto ovmodel = core_.read_model(model);
   compiled_model_ = core_.compile_model(

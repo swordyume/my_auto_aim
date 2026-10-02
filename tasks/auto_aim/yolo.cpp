@@ -7,13 +7,11 @@
 #include "yolos/yolov8.hpp"
 #include "yolos/yolotup.hpp"
 
-#include "tools/yaml.hpp"
-
 namespace auto_aim
 {
 YOLO::YOLO(const std::string & config_path, bool debug)
 {
-  auto yaml = tools::load(config_path);
+  auto yaml = YAML::LoadFile(config_path);
   auto yolo_name = yaml["yolo_name"].as<std::string>();
 
   if (yolo_name == "yolov8") {

@@ -1,6 +1,6 @@
 
-#enemy_color: "red"
-enemy_color: "blue"
+enemy_color: "red"
+#enemy_color: "blue"
 
 #####-----神经网络参数-----#####
 yolo_name: tup
@@ -40,11 +40,11 @@ outpost_max_temp_lost_count: 75
 
 #####-----EKF参数-----#####
 ekf:
-  q_xyz_acc_var: 100.0   # 位置/速度加速度方差
-  q_yaw_acc_var: 75.0    # 角加速度方差
-  r_yaw: 4.0e-2          # yaw 观测噪声
-  r_pitch: 4.0e-2        # pitch 观测噪声
-  r_dist_base: 1.5e-2    # 距离观测噪声基础值
+  q_xyz_acc_var: 50.0   # 位置/速度加速度方差
+  q_yaw_acc_var: 100.0    # 角加速度方差
+  r_yaw: 5.0e-4          # yaw 观测噪声
+  r_pitch: 2.0e-3        # pitch 观测噪声
+  r_dist_base: 0.1   # 距离观测噪声基础值
 
   outpost:
     radius: 0.2765
@@ -59,11 +59,10 @@ ekf:
   normal:
     radius: 0.2
     armor_num: 4
-    p0: [1, 64, 1, 64, 1, 64, 0.4, 400, 1.0e-5, 1, 1]
-
+    p0: [1, 64, 1, 64, 1, 64, 0.4, 400, 1.0e-3, 1,1]
 #####-----aimer参数-----#####
 yaw_offset: 0 # degree -2.5
-pitch_offset: 1 # degree 2
+pitch_offset: -1.5 # degree 2
 comming_angle: 55 # degree
 leaving_angle: 20 # degree
 decision_speed: 7 # rad/s
@@ -77,8 +76,8 @@ judge_distance: 2 #距离判断阈值
 auto_fire: true # 是否由自瞄控制射击
 
 camera_name: "hikrobot"
-exposure_ms: 4
-gain: 10
+exposure_ms: 8
+gain: 15
 vid_pid: "2bdf:0001"
 
 #  1  0  0
@@ -88,14 +87,14 @@ vid_pid: "2bdf:0001"
 R_gimbal2imubody: [1, 0, 0, 0, 1, 0, 0, 0, 1]
 
 # 重投影误差: 0.1833px
-camera_matrix: [1818.2616078589235, 0.0, 703.8607727723271, 0.0, 1816.5751262244844, 570.2397898080102, 0.0, 0.0, 1.0]
-
-distort_coeffs: [-0.08283172203391537, 0.1751866754713143, -0.0003758661939308277, 3.2330374061035256e-05, 0.0]
+camera_matrix: [1822.6803758705682, 0.0, 709.905892859651, 0.0, 1821.786699651555, 573.5638307092975, 0.0, 0.0, 1.0]
+distort_coeffs: [-0.0752023552908561, 0.15984202022625807, -0.000605938281026255, -0.0015637381963789355, 0.0]
 # 相机同理想情况的偏角: yaw-1.11 pitch0.01 roll-0.06 degree
 # 标定板到世界坐标系原点的水平距离: 1.20 m
 # 标定板同竖直摆放时的偏角: yaw123.89 pitch14.05 roll-0.86 degree
 R_camera2gimbal: [0,0,1,-1,0,0,0,-1,0]
-t_camera2gimbal: [0.18089617453251859, 0.0038468007459533785, 0.094139945222010288]
+
+t_camera2gimbal: [0.13089617453251859, 0.0038468007459533785, 0.055139945222010288]
 
 #####-----cboard参数-----#####
 quaternion_canid: 0x100
@@ -111,7 +110,7 @@ pitch_kp: 0
 pitch_kd: 0
 
 #####-----planner-----#####
-fire_thresh: 0.0035
+fire_thresh: 0.5
 
 max_yaw_acc: 50
 Q_yaw: [9e6, 0]

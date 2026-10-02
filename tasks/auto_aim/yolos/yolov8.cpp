@@ -2,6 +2,7 @@
 
 #include <fmt/chrono.h>
 #include <omp.h>
+#include <yaml-cpp/yaml.h>
 
 #include <algorithm>
 #include <filesystem>
@@ -10,16 +11,15 @@
 #include "tasks/auto_aim/classifier.hpp"
 #include "tools/img_tools.hpp"
 #include "tools/remote_logger.hpp"
-#include "tools/yaml.hpp"
 
 namespace auto_aim
 {
 YOLOV8::YOLOV8(const std::string & config_path, bool debug)
 : classifier_(config_path), detector_(config_path), debug_(debug)
 {
-  auto yaml = tools::load(config_path);
+  auto yaml = YAML::LoadFile(config_path);
 
-  model_path_ = tools::read_path(yaml, "yolov8_model_path");
+  model_path_ = yaml["yolov8_model_path"].as<std::string>();
   device_ = yaml["device"].as<std::string>();
   binary_threshold_ = yaml["threshold"].as<double>();
   min_confidence_ = yaml["min_confidence"].as<double>();
