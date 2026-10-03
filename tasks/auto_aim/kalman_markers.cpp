@@ -40,11 +40,12 @@ nlohmann::json kalman_markers(const auto_aim::Target & target)
 {
   MarkerArray arr;  // frame_id default world
   const Eigen::VectorXd x = target.ekf_x();
-  if (x.size() < 11) return arr.to_json();
+  if (x.size() < 14) return arr.to_json();
 
-  const Eigen::Vector3d center{x[0], x[2], x[4]};
-  const Eigen::Vector3d vel{x[1], x[3], x[5]};
-  const double w = x[7];
+  const Eigen::Vector3d center{x[0], x[3], x[6]};
+  const Eigen::Vector3d vel{x[1], x[4], x[7]};
+  const Eigen::Vector3d acc{x[2], x[5], x[8]};
+  const double w = x[10];
 
   arr.sphere("kalman.center", "c", center, 0.04, {1.0, 0.45, 0.1, 1.0});
 
@@ -52,6 +53,12 @@ nlohmann::json kalman_markers(const auto_aim::Target & target)
   if (vnorm > 1e-6) {
     const double shaft = std::min(0.8, std::max(0.05, vnorm * 0.15));
     arr.arrow("kalman.vel", "v", center, vel.normalized(), shaft, {0.2, 0.9, 0.3, 1.0});
+  }
+
+  const double anorm = acc.norm();
+  if (anorm > 1e-3) {
+    const double shaft = std::min(0.5, std::max(0.05, anorm * 0.05));
+    arr.arrow("kalman.acc", "a", center, acc.normalized(), shaft, {1.0, 0.8, 0.2, 1.0});
   }
 
   if (std::abs(w) > 1e-4) {

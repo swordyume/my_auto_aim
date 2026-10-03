@@ -99,14 +99,17 @@ int main(int argc, char * argv[])
       data["fired"] = fired ? 1 : 0;
 
       if (target.has_value()) {
-        data["target_x"] = target->ekf_x()[0];   //z
-        data["target_vx"] = target->ekf_x()[1];
-        data["target_y"] = target->ekf_x()[2];   //z
-        data["target_vy"] = target->ekf_x()[3];
-        data["target_z"] = target->ekf_x()[4];   //z
-        data["target_vz"] = target->ekf_x()[5];  //vz
-        data["target_yaw"] = target->ekf_x()[6];
-        data["target_yaw_vel"] = target->ekf_x()[7];
+        data["target_x"] = target->ekf_x()[0];   //x
+        data["target_vx"] = target->ekf_x()[1];  //vx
+        data["target_ax"] = target->ekf_x()[2];  //ax
+        data["target_y"] = target->ekf_x()[3];   //y
+        data["target_vy"] = target->ekf_x()[4];  //vy
+        data["target_ay"] = target->ekf_x()[5];  //ay
+        data["target_z"] = target->ekf_x()[6];   //z
+        data["target_vz"] = target->ekf_x()[7];  //vz
+        data["target_az"] = target->ekf_x()[8];  //az
+        data["target_yaw"] = target->ekf_x()[9];
+        data["target_yaw_vel"] = target->ekf_x()[10];
       }
       if (target.has_value() && !armors.empty()) {
         for (const auto & a : armors) {
@@ -120,7 +123,7 @@ int main(int argc, char * argv[])
         }
       }
       if (target.has_value()) {
-        data["w"] = target->ekf_x()[7];
+        data["w"] = target->ekf_x()[10];
         data["markers"] = tools::viz::kalman_markers(*target);
       } else {
         data["w"] = 0.0;

@@ -53,7 +53,7 @@ void CommandGener::generate_command()
                                    ? 0
                                    : std::sqrt(
                                        tools::square(input->targets_.front().ekf_x()[0]) +
-                                       tools::square(input->targets_.front().ekf_x()[2]));
+                                       tools::square(input->targets_.front().ekf_x()[3]));
       cboard_.send(command);
       if (debug_) {
         nlohmann::json data;

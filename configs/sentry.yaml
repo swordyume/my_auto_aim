@@ -40,29 +40,29 @@ outpost_max_temp_lost_count: 75
 
 #####-----EKF参数-----#####
 ekf:
-  q_xyz_acc_var: 50.0   # 位置/速度加速度方差
-  q_yaw_acc_var: 100.0    # 角加速度方差
-  r_yaw: 5.0e-4          # yaw 观测噪声
+  q_xyz_acc_var: 20.0   # 平移过程噪声 (CA 模型 jerk 方差)
+  q_yaw_acc_var: 80.0    # 角加速度方差
+  r_yaw: 1.0e-3          # yaw 观测噪声
   r_pitch: 2.0e-3        # pitch 观测噪声
   r_dist_base: 0.1   # 距离观测噪声基础值
 
   outpost:
     radius: 0.2765
     armor_num: 3
-    p0: [1, 64, 1, 64, 1, 81, 0.4, 100, 1.0e-4, 0, 0]
+    p0: [1, 64, 1.0, 1, 64, 1.0, 1, 81, 1.0, 0.4, 100, 1.0e-4, 0, 0]
 
   base:
     radius: 0.3205
     armor_num: 3
-    p0: [1, 64, 1, 64, 1, 64, 0.4, 100, 1.0e-4, 0, 0]
+    p0: [1, 64, 1.0, 1, 64, 1.0, 1, 64, 1.0, 0.4, 100, 1.0e-4, 0, 0]
 
   normal:
     radius: 0.2
     armor_num: 4
-    p0: [1, 64, 1, 64, 1, 64, 0.4, 400, 1.0e-3, 1,1]
+    p0: [1, 64, 1.0, 1, 64, 1.0, 1, 64, 1.0, 0.4, 400, 1.0e-3, 1, 1]
 #####-----aimer参数-----#####
 yaw_offset: 0 # degree -2.5
-pitch_offset: -1.5 # degree 2
+pitch_offset: -0.5 # degree 2
 comming_angle: 55 # degree
 leaving_angle: 20 # degree
 decision_speed: 7 # rad/s
@@ -94,7 +94,7 @@ distort_coeffs: [-0.0752023552908561, 0.15984202022625807, -0.000605938281026255
 # 标定板同竖直摆放时的偏角: yaw123.89 pitch14.05 roll-0.86 degree
 R_camera2gimbal: [0,0,1,-1,0,0,0,-1,0]
 
-t_camera2gimbal: [0.13089617453251859, 0.0038468007459533785, 0.055139945222010288]
+t_camera2gimbal: [0.11089617453251859, 0.0038468007459533785, 0.08139945222010288]
 
 #####-----cboard参数-----#####
 quaternion_canid: 0x100
@@ -110,7 +110,7 @@ pitch_kp: 0
 pitch_kd: 0
 
 #####-----planner-----#####
-fire_thresh: 0.5
+fire_thresh: 0.03
 
 max_yaw_acc: 50
 Q_yaw: [9e6, 0]

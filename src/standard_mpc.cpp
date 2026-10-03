@@ -116,7 +116,7 @@ int main(int argc, char * argv[])
       if (!targets.empty()) {
         target_queue.push(targets.front());
         Eigen::VectorXd x = targets.front().ekf_x();
-        data["yaw"] = x[6];
+        data["yaw"] = x[9];
       }
       else
         target_queue.push(std::nullopt);

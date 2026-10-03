@@ -206,14 +206,17 @@ int main(int argc, char * argv[])
         const auto & x = target_opt->ekf_x();
         data["target_x"] = x[0];
         data["target_vx"] = x[1];
-        data["target_y"] = x[2];
-        data["target_vy"] = x[3];
-        data["target_z"] = x[4];
-        data["target_vz"] = x[5];
-        data["target_yaw"] = x[6];
-        data["target_yaw_vel"] = x[7];
-        data["w"] = x[7];
-        data["measure_yaw"] = x[6];
+        data["target_ax"] = x[2];
+        data["target_y"] = x[3];
+        data["target_vy"] = x[4];
+        data["target_ay"] = x[5];
+        data["target_z"] = x[6];
+        data["target_vz"] = x[7];
+        data["target_az"] = x[8];
+        data["target_yaw"] = x[9];
+        data["target_yaw_vel"] = x[10];
+        data["w"] = x[10];
+        data["measure_yaw"] = x[9];
       } else {
         data["w"] = 0.0;
       }

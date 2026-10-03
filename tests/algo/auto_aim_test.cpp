@@ -162,15 +162,18 @@ int main(int argc, char * argv[])
       Eigen::VectorXd x = target.ekf_x();
       data["x"] = x[0];
       data["vx"] = x[1];
-      data["y"] = x[2];
-      data["vy"] = x[3];
-      data["z"] = x[4];
-      data["vz"] = x[5];
-      data["a"] = x[6] * 57.3;
-      data["w"] = x[7];
-      data["r"] = x[8];
-      data["l"] = x[9];
-      data["h"] = x[10];
+      data["ax"] = x[2];
+      data["y"] = x[3];
+      data["vy"] = x[4];
+      data["ay"] = x[5];
+      data["z"] = x[6];
+      data["vz"] = x[7];
+      data["az"] = x[8];
+      data["a"] = x[9] * 57.3;
+      data["w"] = x[10];
+      data["r"] = x[11];
+      data["l"] = x[12];
+      data["h"] = x[13];
       data["last_id"] = target.last_id;
 
       // 卡方检验数据

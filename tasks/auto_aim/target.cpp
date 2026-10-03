@@ -32,18 +32,29 @@ Target::Target(
   auto center_y = xyz[1] + r * std::sin(ypr[0]);
   auto center_z = xyz[2];
 
-  // x vx y vy z vz a w r l h
+  // x vx ax y vy ay z vz az a w r l h
   // a: angle
   // w: angular velocity
   // l: r2 - r1
   // h: z2 - z1
-  Eigen::VectorXd x0{{center_x, 0, center_y, 0, center_z, 0, ypr[0], 0, r, 0, 0}};  //初始化预测量
-  Eigen::MatrixXd P0 = P0_dig.asDiagonal();
+  Eigen::VectorXd x0{
+    {center_x, 0, 0, center_y, 0, 0, center_z, 0, 0, ypr[0], 0, r, 0, 0}};  //初始化预测量
+
+  // 兼容旧配置：p0 为 11 维时按新布局插入加速度初始方差
+  Eigen::VectorXd P0_dig14;
+  if (P0_dig.size() == 11) {
+    P0_dig14.resize(14);
+    P0_dig14 << P0_dig[0], P0_dig[1], 1.0, P0_dig[2], P0_dig[3], 1.0, P0_dig[4],
+      P0_dig[5], 1.0, P0_dig[6], P0_dig[7], P0_dig[8], P0_dig[9], P0_dig[10];
+  } else {
+    P0_dig14 = P0_dig;
+  }
+  Eigen::MatrixXd P0 = P0_dig14.asDiagonal();
 
   // 防止夹角求和出现异常值
   auto x_add = [](const Eigen::VectorXd & a, const Eigen::VectorXd & b) -> Eigen::VectorXd {
     Eigen::VectorXd c = a + b;
-    c[6] = tools::limit_rad(c[6]);
+    c[9] = tools::limit_rad(c[9]);
     return c;
   };
 
@@ -52,14 +63,21 @@ Target::Target(
 
 Target::Target(double x, double vyaw, double radius, double h) : armor_num_(4)
 {
-  Eigen::VectorXd x0{{x, 0, 0, 0, 0, 0, 0, vyaw, radius, 0, h}};
-  Eigen::VectorXd P0_dig{{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}};
+  // 离线/测试用：给一组默认可用的过程噪声，避免未初始化
+  ekf_params_.q_xyz_acc_var = 100.0;
+  ekf_params_.q_yaw_acc_var = 75.0;
+  ekf_params_.r_yaw = 4.0e-2;
+  ekf_params_.r_pitch = 4.0e-2;
+  ekf_params_.r_dist_base = 1.5e-2;
+
+  Eigen::VectorXd x0{{x, 0, 0, 0, 0, 0, 0, 0, 0, 0, vyaw, radius, 0, h}};
+  Eigen::VectorXd P0_dig{{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}};
   Eigen::MatrixXd P0 = P0_dig.asDiagonal();
 
   // 防止夹角求和出现异常值
   auto x_add = [](const Eigen::VectorXd & a, const Eigen::VectorXd & b) -> Eigen::VectorXd {
     Eigen::VectorXd c = a + b;
-    c[6] = tools::limit_rad(c[6]);
+    c[9] = tools::limit_rad(c[9]);
     return c;
   };
 
@@ -76,61 +94,67 @@ void Target::predict(std::chrono::steady_clock::time_point t)
 void Target::predict(double dt)
 {
   // 状态转移矩阵
-  // clang-format off
-  Eigen::MatrixXd F{
-    {1, dt,  0,  0,  0,  0,  0,  0,  0,  0,  0},
-    {0,  1,  0,  0,  0,  0,  0,  0,  0,  0,  0},
-    {0,  0,  1, dt,  0,  0,  0,  0,  0,  0,  0},
-    {0,  0,  0,  1,  0,  0,  0,  0,  0,  0,  0},
-    {0,  0,  0,  0,  1, dt,  0,  0,  0,  0,  0},
-    {0,  0,  0,  0,  0,  1,  0,  0,  0,  0,  0},
-    {0,  0,  0,  0,  0,  0,  1, dt,  0,  0,  0},
-    {0,  0,  0,  0,  0,  0,  0,  1,  0,  0,  0},
-    {0,  0,  0,  0,  0,  0,  0,  0,  1,  0,  0},
-    {0,  0,  0,  0,  0,  0,  0,  0,  0,  1,  0},
-    {0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  1}
-  };
-  // clang-format on
+  Eigen::MatrixXd F = Eigen::MatrixXd::Identity(14, 14);
+  for (int k = 0; k < 3; k++) {
+    int p = 3 * k;   // x=0, y=3, z=6
+    int v = p + 1;   // vx=1, vy=4, vz=7
+    int a = p + 2;   // ax=2, ay=5, az=8
+    F(p, v) = dt;
+    F(p, a) = 0.5 * dt * dt;
+    F(v, a) = dt;
+  }
+  F(9, 10) = dt;  // yaw
 
-  // Piecewise White Noise Model
+  // Piecewise White Noise Model（平移改为常加速模型，jerk 白噪声驱动加速度状态）
   // https://github.com/rlabbe/Kalman-and-Bayesian-Filters-in-Python/blob/master/07-Kalman-Filter-Math.ipynb
-  double v1, v2;
-  //轮腿
-  // v1 = 100;  // 加速度方差
-  // v2 = 75;  // 角加速度方差
-  //哨兵
-  v1 = ekf_params_.q_xyz_acc_var;
-  v2 = ekf_params_.q_yaw_acc_var;
+  double v1 = ekf_params_.q_xyz_acc_var;
+  double v2 = ekf_params_.q_yaw_acc_var;
   auto a = dt * dt * dt * dt / 4;
   auto b = dt * dt * dt / 2;
   auto c = dt * dt;
+
   // 预测过程噪声偏差的方差
-  // clang-format off
-  Eigen::MatrixXd Q{
-    {a * v1, b * v1,      0,      0,      0,      0,      0,      0, 0, 0, 0},
-    {b * v1, c * v1,      0,      0,      0,      0,      0,      0, 0, 0, 0},
-    {     0,      0, a * v1, b * v1,      0,      0,      0,      0, 0, 0, 0},
-    {     0,      0, b * v1, c * v1,      0,      0,      0,      0, 0, 0, 0},
-    {     0,      0,      0,      0, a * v1, b * v1,      0,      0, 0, 0, 0},
-    {     0,      0,      0,      0, b * v1, c * v1,      0,      0, 0, 0, 0},
-    {     0,      0,      0,      0,      0,      0, a * v2, b * v2, 0, 0, 0},
-    {     0,      0,      0,      0,      0,      0, b * v2, c * v2, 0, 0, 0},
-    {     0,      0,      0,      0,      0,      0,      0,      0, 0, 0, 0},
-    {     0,      0,      0,      0,      0,      0,      0,      0, 0, 0, 0},
-    {     0,      0,      0,      0,      0,      0,      0,      0, 0, 0, 0}
-  };
-  // clang-format on
+  Eigen::MatrixXd Q = Eigen::MatrixXd::Zero(14, 14);
+  auto T2 = dt * dt;
+  auto T3 = T2 * dt;
+  auto T4 = T3 * dt;
+  auto T5 = T4 * dt;
+  auto q11 = v1 * T5 / 20;
+  auto q12 = v1 * T4 / 8;
+  auto q13 = v1 * T3 / 6;
+  auto q22 = v1 * T3 / 3;
+  auto q23 = v1 * T2 / 2;
+  auto q33 = v1 * dt;
+  for (int k = 0; k < 3; k++) {
+    int p = 3 * k;    // 0,3,6
+    int v = p + 1;    // 1,4,7
+    int a_i = p + 2;  // 2,5,8
+    Q(p, p) = q11;
+    Q(p, v) = q12;
+    Q(p, a_i) = q13;
+    Q(v, p) = q12;
+    Q(v, v) = q22;
+    Q(v, a_i) = q23;
+    Q(a_i, p) = q13;
+    Q(a_i, v) = q23;
+    Q(a_i, a_i) = q33;
+  }
+  // yaw 保持原模型
+  Q(9, 9) = a * v2;
+  Q(9, 10) = b * v2;
+  Q(10, 9) = b * v2;
+  Q(10, 10) = c * v2;
 
   // 防止夹角求和出现异常值
   auto f = [&](const Eigen::VectorXd & x) -> Eigen::VectorXd {
     Eigen::VectorXd x_prior = F * x;
-    x_prior[6] = tools::limit_rad(x_prior[6]);
+    x_prior[9] = tools::limit_rad(x_prior[9]);
     return x_prior;
   };
 
   // 前哨站转速特判
-  if (this->convergened() && this->name == ArmorName::outpost && std::abs(this->ekf_.x[7]) > 2)
-    this->ekf_.x[7] = this->ekf_.x[7] > 0 ? 2.51 : -2.51;
+  if (this->convergened() && this->name == ArmorName::outpost && std::abs(this->ekf_.x[10]) > 2)
+    this->ekf_.x[10] = this->ekf_.x[10] > 0 ? 2.51 : -2.51;
 
   ekf_.predict(F, Q, f);
 }
@@ -209,7 +233,7 @@ void Target::update_ypda(const Armor & armor, int id)
   auto h = [&](const Eigen::VectorXd & x) -> Eigen::Vector4d {
     Eigen::VectorXd xyz = h_armor_xyz(x, id);
     Eigen::VectorXd ypd = tools::xyz2ypd(xyz);
-    auto angle = tools::limit_rad(x[6] + id * 2 * CV_PI / armor_num_);
+    auto angle = tools::limit_rad(x[9] + id * 2 * CV_PI / armor_num_);
     return {ypd[0], ypd[1], ypd[2], angle};
   };
 
@@ -238,7 +262,7 @@ std::vector<Eigen::Vector4d> Target::armor_xyza_list() const
   std::vector<Eigen::Vector4d> _armor_xyza_list;
 
   for (int i = 0; i < armor_num_; i++) {
-    auto angle = tools::limit_rad(ekf_.x[6] + i * 2 * CV_PI / armor_num_);
+    auto angle = tools::limit_rad(ekf_.x[9] + i * 2 * CV_PI / armor_num_);
     Eigen::Vector3d xyz = h_armor_xyz(ekf_.x, i);
     _armor_xyza_list.push_back({xyz[0], xyz[1], xyz[2], angle});
   }
@@ -247,12 +271,13 @@ std::vector<Eigen::Vector4d> Target::armor_xyza_list() const
 
 bool Target::diverged() const
 {
-  auto r_ok = ekf_.x[8] > 0.05 && ekf_.x[8] < 0.5;
-  auto l_ok = ekf_.x[8] + ekf_.x[9] > 0.05 && ekf_.x[8] + ekf_.x[9] < 0.5;
+  auto r_ok = ekf_.x[11] > 0.05 && ekf_.x[11] < 0.5;
+  auto l_ok = ekf_.x[11] + ekf_.x[12] > 0.05 && ekf_.x[11] + ekf_.x[12] < 0.5;
 
   if (r_ok && l_ok) return false;
 
-  tools::RemoteLogger::instance().log("DEBUG", "[Target] r={:.3f}, l={:.3f}", ekf_.x[8], ekf_.x[9]);
+  tools::RemoteLogger::instance().log(
+    "DEBUG", "[Target] r={:.3f}, l={:.3f}", ekf_.x[11], ekf_.x[12]);
   return true;
 }
 
@@ -273,23 +298,23 @@ bool Target::convergened()
 // 计算出装甲板中心的坐标（考虑长短轴）
 Eigen::Vector3d Target::h_armor_xyz(const Eigen::VectorXd & x, int id) const
 {
-  auto angle = tools::limit_rad(x[6] + id * 2 * CV_PI / armor_num_);
+  auto angle = tools::limit_rad(x[9] + id * 2 * CV_PI / armor_num_);
   auto use_l_h = (armor_num_ == 4) && (id == 1 || id == 3);
 
-  auto r = (use_l_h) ? x[8] + x[9] : x[8];
+  auto r = (use_l_h) ? x[11] + x[12] : x[11];
   auto armor_x = x[0] - r * std::cos(angle);
-  auto armor_y = x[2] - r * std::sin(angle);
-  auto armor_z = (use_l_h) ? x[4] + x[10] : x[4];
+  auto armor_y = x[3] - r * std::sin(angle);
+  auto armor_z = (use_l_h) ? x[6] + x[13] : x[6];
 
   return {armor_x, armor_y, armor_z};
 }
 
 Eigen::MatrixXd Target::h_jacobian(const Eigen::VectorXd & x, int id) const
 {
-  auto angle = tools::limit_rad(x[6] + id * 2 * CV_PI / armor_num_);
+  auto angle = tools::limit_rad(x[9] + id * 2 * CV_PI / armor_num_);
   auto use_l_h = (armor_num_ == 4) && (id == 1 || id == 3);
 
-  auto r = (use_l_h) ? x[8] + x[9] : x[8];
+  auto r = (use_l_h) ? x[11] + x[12] : x[11];
   auto dx_da = r * std::sin(angle);
   auto dy_da = -r * std::cos(angle);
 
@@ -300,13 +325,20 @@ Eigen::MatrixXd Target::h_jacobian(const Eigen::VectorXd & x, int id) const
 
   auto dz_dh = (use_l_h) ? 1.0 : 0.0;
 
+  // 加速度状态与观测无关，对应列全 0
   // clang-format off
-  Eigen::MatrixXd H_armor_xyza{
-    {1, 0, 0, 0, 0, 0, dx_da, 0, dx_dr, dx_dl,     0},
-    {0, 0, 1, 0, 0, 0, dy_da, 0, dy_dr, dy_dl,     0},
-    {0, 0, 0, 0, 1, 0,     0, 0,     0,     0, dz_dh},
-    {0, 0, 0, 0, 0, 0,     1, 0,     0,     0,     0}
-  };
+  Eigen::MatrixXd H_armor_xyza = Eigen::MatrixXd::Zero(4, 14);
+  H_armor_xyza(0, 0) = 1;
+  H_armor_xyza(0, 9) = dx_da;
+  H_armor_xyza(0, 11) = dx_dr;
+  H_armor_xyza(0, 12) = dx_dl;
+  H_armor_xyza(1, 3) = 1;
+  H_armor_xyza(1, 9) = dy_da;
+  H_armor_xyza(1, 11) = dy_dr;
+  H_armor_xyza(1, 12) = dy_dl;
+  H_armor_xyza(2, 6) = 1;
+  H_armor_xyza(2, 13) = dz_dh;
+  H_armor_xyza(3, 9) = 1;
   // clang-format on
 
   Eigen::VectorXd armor_xyz = h_armor_xyz(x, id);
