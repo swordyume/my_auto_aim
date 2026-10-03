@@ -40,7 +40,7 @@ outpost_max_temp_lost_count: 75
 
 #####-----EKF参数-----#####
 ekf:
-  q_xyz_acc_var: 20.0   # 平移过程噪声 (CA 模型 jerk 方差)
+  q_xyz_acc_var: 50.0   # 平移过程噪声 (CA 模型 jerk 方差)
   q_yaw_acc_var: 80.0    # 角加速度方差
   r_yaw: 1.0e-3          # yaw 观测噪声
   r_pitch: 2.0e-3        # pitch 观测噪声
@@ -67,7 +67,7 @@ comming_angle: 55 # degree
 leaving_angle: 20 # degree
 decision_speed: 7 # rad/s
 high_speed_delay_time: 0.04 # s
-low_speed_delay_time: 0.04 # s planner use this value
+low_speed_delay_time: 0.08 # s planner use this value
 
 #####-----shooter参数-----#####
 first_tolerance: 3 # 近距离射击容差，degree
