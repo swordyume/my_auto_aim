@@ -110,6 +110,9 @@ int main(int argc, char * argv[])
         data["target_az"] = target->ekf_x()[8];  //az
         data["target_yaw"] = target->ekf_x()[9];
         data["target_yaw_vel"] = target->ekf_x()[10];
+        data["r"]=target->ekf_x()[11];
+        data["l"]=target->ekf_x()[12];
+        data["h"]=target->ekf_x()[13];
       }
       if (target.has_value() && !armors.empty()) {
         for (const auto & a : armors) {

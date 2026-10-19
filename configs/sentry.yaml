@@ -1,6 +1,6 @@
 
-enemy_color: "red"
-#enemy_color: "blue"
+#enemy_color: "red"
+enemy_color: "blue"
 
 #####-----神经网络参数-----#####
 yolo_name: tup
