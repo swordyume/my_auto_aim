@@ -36,6 +36,7 @@ add_subdirectory(tasks/omniperception)
 
 add_subdirectory(src)
 add_subdirectory(tests)
+add_subdirectory(sim)
 add_subdirectory(calibration)
 
 add_executable(diagnose_hik_camera io/hikrobot/diagnose_camera.cpp)
