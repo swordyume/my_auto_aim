@@ -1,12 +1,12 @@
 // 断帧 / 打灭工况下的 CA 卡尔曼仿真（纯离线，不接相机/云台）
 //
-// 目的：按真实观测情况生成"无偏"的量测输入，喂给 singer 分支真实的 Target/EKF，
-//       看断帧（最近装甲板被打灭 4~6 帧）会不会让 w / yaw / 瞄准点产生系统性偏差。
+// 目的：按真实观测情况生成"无偏"的量测输入，喂给真实的 Target/EKF，
+//       看最近装甲板被打灭 10~12 帧时，真值与 EKF 状态向量（中心 / yaw / w / r）的差距。
 //
 // 观测模型（可直接命令行调节）：
 //   - 真值：4 块板绕中心自转，半径 0.285，间隔 90°，中心固定
 //   - 平时：按入射角阈值只送 1~2 块板（相机不可能同时看到 4 块）
-//   - 打灭：离相机最近的那块板（min |P|）灭 4~6 帧，期间只剩 0~1 块掠射板
+//   - 打灭：离相机最近的那块板（min |P|）灭 10~12 帧，期间只剩 0~1 块掠射板
 //   - 量测：(az, pitch, dist, armor_yaw) = 真值 + 零均值高斯噪声，无任何偏置
 //   - 某帧一块板都没有 → 该帧不调用 update()，只 predict()（和 tracker.cpp 一致）
 //
@@ -39,7 +39,6 @@
 #include "tools/img_tools.hpp"
 #include "tools/math_tools.hpp"
 #include "tools/rdbg/session.hpp"
-#include "tools/trajectory.hpp"
 #include "tools/yaml.hpp"
 
 namespace
@@ -56,11 +55,11 @@ struct Args
   double az = 0.695;            // 中心方位角, rad
   double z = 0.0;               // 中心高度, m
   double radius = 0.285;        // 真值半径, m
-  double init_radius = -1.0;    // <0 表示用真值半径；否则用配置值
+  double init_radius = -1.0;    // <0 表示用配置半径；否则用给定值
   double fps = 122.0;
   double duration = 20.0;
   double warmup = 7.0;          // 打灭事件从 warmup 之后开始
-  double stats_from = 2.5;      // 统计起点
+  double stats_from = -1.0;     // 统计起点，<0 表示与 warmup 对齐
   int seed = 1;
   int dark = 1;                 // 1 = 启用打灭
   double dark_period = 0.5;   // 打灭事件间隔（默认一块板转过来的时间）
@@ -74,7 +73,6 @@ struct Args
   double bias_az = 0.0;         // deg，掠射角下的方位角偏置
   double bias_angle = 60.0;     // deg，入射角超过该值时施加 bias
   double latency_ms = 0.0;      // 观测相对状态的时间滞后（模拟相机时间戳滞后）
-  double bullet_speed = 22.0;
   bool image = true;
   int image_every = 4;          // 122/4 ≈ 30 fps
   std::string out = "sim/logs";
@@ -91,13 +89,15 @@ void print_usage(const char * argv0)
     "  --dist=2.666         目标中心距离 m\n"
     "  --az=0.695           目标中心方位角 rad\n"
     "  --radius=0.285       真值半径 m\n"
-    "  --init-radius=R      Target 初始半径（<0 用真值，默认）\n"
+    "  --init-radius=R      Target 初始半径（<0 用配置半径，默认）\n"
     "  --fps=122            仿真帧率\n"
     "  --duration=20        仿真时长 s\n"
+    "  --warmup=7           打灭事件从该时刻之后开始 s\n"
+    "  --stats-from=-1      统计起点 s，<0 表示与 warmup 对齐\n"
     "  --seed=1             随机种子\n"
     "  --dark=1             1 启用打灭 / 0 基线\n"
-    "  --dark-period=0.138  打灭事件间隔 s\n"
-    "  --dark-frames=0      0 = 4~6 随机，>0 固定帧数\n"
+    "  --dark-period=0.5    打灭事件间隔 s\n"
+    "  --dark-frames=0      0 = 10~12 随机，>0 固定帧数\n"
     "  --phi-detect=70      入射角检测阈值（度）\n"
     "  --sigma-az=0.005     方位角噪声 rad\n"
     "  --sigma-pitch=0.003  俯仰角噪声 rad\n"
@@ -107,7 +107,6 @@ void print_usage(const char * argv0)
     "  --bias-az=0          掠射角下的方位角偏置 deg\n"
     "  --bias-angle=60      入射角超过该值时施加 bias deg\n"
     "  --latency-ms=0       观测相对状态的时间滞后 ms\n"
-    "  --bullet-speed=22    弹速 m/s\n"
     "  --image=1            1 写图像 / 0 不写\n"
     "  --image-every=4      每 N 帧写一张\n"
     "  --out=sim/logs       rlog 输出目录\n"
@@ -169,7 +168,6 @@ Args parse_args(int argc, char ** argv)
   num("bias-az", a.bias_az);
   num("bias-angle", a.bias_angle);
   num("latency-ms", a.latency_ms);
-  num("bullet-speed", a.bullet_speed);
   int image_i = a.image ? 1 : 0;
   inum("image", image_i);
   a.image = image_i != 0;
@@ -191,6 +189,7 @@ Args parse_args(int argc, char ** argv)
     std::exit(2);
   }
   if (get("dark")) a.dark = std::stoi(*get("dark"));  // 显式覆盖 preset
+  if (a.stats_from < 0.0) a.stats_from = a.warmup;    // 默认与打灭窗口对齐
   if (a.tag.empty()) a.tag = fmt::format("{}_s{}", a.preset, a.seed);
   return a;
 }
@@ -303,10 +302,10 @@ struct Rec
   double t = 0.0;
   bool has_target = false;
   double w = 0.0, yaw = 0.0, x = 0.0, y = 0.0, r = 0.0;
+  // 真值与 EKF 状态向量的差距
+  double yaw_err = NAN, w_err = NAN, center_err = NAN, r_err = NAN;
   int nobs = 0;
   bool dark = false;
-  double aim_err = NAN, aim_err_red = NAN;
-  int aim_state_id = -1, aim_true_id = -1;
   double in_az = NAN, in_pitch = NAN, in_dist = NAN, in_yaw = NAN;      // obs - truth
   double inn_az = NAN, inn_pitch = NAN, inn_dist = NAN, inn_yaw = NAN;  // obs - predict
   double obs1_az = NAN, obs1_pitch = NAN, obs1_dist = NAN, obs1_yaw = NAN;  // 第一块板的原始观测
@@ -384,15 +383,13 @@ int main(int argc, char ** argv)
 
   auto node = ekf["normal"];
   int armor_num = node["armor_num"].as<int>();
+  const double cfg_radius = node["radius"].as<double>();
   auto p0_vec = node["p0"].as<std::vector<double>>();
   Eigen::VectorXd p0 = Eigen::Map<Eigen::VectorXd>(p0_vec.data(), p0_vec.size());
 
-  const double decision_speed = yaml["decision_speed"].as<double>();
-  const double high_delay = yaml["high_speed_delay_time"].as<double>();
-  const double low_delay = yaml["low_speed_delay_time"].as<double>();
   const int max_temp_lost = yaml["max_temp_lost_count"] ? yaml["max_temp_lost_count"].as<int>() : 15;
 
-  const double init_radius = args.init_radius >= 0.0 ? args.init_radius : args.radius;
+  const double init_radius = args.init_radius >= 0.0 ? args.init_radius : cfg_radius;
 
   // ---------------- 真值 / Solver / rlog ----------------
   Truth truth;
@@ -554,8 +551,6 @@ int main(int argc, char ** argv)
       }
     }
 
-    Eigen::Vector3d aim_pred = Eigen::Vector3d::Zero();
-    double aim_yaw = 0.0;
     if (target) {
       const auto & x = target->ekf_x();
       r.has_target = true;
@@ -565,74 +560,11 @@ int main(int argc, char ** argv)
       r.y = x[3];
       r.r = x[11];
 
-      // ---- 瞄准点误差：和 planner 一致（delay + fly_time），取最近板 ----
-      auto list_now = target->armor_xyza_list();
-      double min_dist = 1e18;
-      Eigen::Vector3d aim_xyz = Eigen::Vector3d::Zero();
-      for (auto & xyza : list_now) {
-        double d = xyza.head<2>().norm();
-        if (d < min_dist) {
-          min_dist = d;
-          aim_xyz = xyza.head<3>();
-        }
-      }
-      const double delay = std::abs(x[10]) > decision_speed ? high_delay : low_delay;
-      const double fly = tools::Trajectory(args.bullet_speed, min_dist, aim_xyz.z()).fly_time;
-      const double T = delay + fly;
-
-      auto tgt_fly = *target;
-      tgt_fly.predict(T);
-      auto list_T = tgt_fly.armor_xyza_list();
-      double best_d = 1e18;
-      int best_i = -1;
-      for (int i = 0; i < static_cast<int>(list_T.size()); i++) {
-        double d = list_T[i].head<2>().norm();
-        if (d < best_d) {
-          best_d = d;
-          best_i = i;
-        }
-      }
-      if (best_i >= 0) {
-        aim_pred = list_T[best_i].head<3>();
-        aim_yaw = list_T[best_i][3];
-        r.aim_state_id = best_i;
-
-        // 真值里离预测点最近的那块板 = 实际瞄的那块
-        const double yf = tools::limit_rad(truth.yaw + truth.w * T);
-        double best_td = 1e18;
-        int best_ti = -1;
-        for (int i = 0; i < truth.n; i++) {
-          double d = (truth.plate_xyz_at(yf, i) - aim_pred).norm();
-          if (d < best_td) {
-            best_td = d;
-            best_ti = i;
-          }
-        }
-        r.aim_true_id = best_ti;
-        r.aim_err = best_td;
-
-        // 红框对应的外推（fly-time 之后 0.50 s）
-        auto tgt_red = *target;
-        tgt_red.predict(T + 0.50);
-        auto list_R = tgt_red.armor_xyza_list();
-        double bd = 1e18;
-        int bi = -1;
-        for (int i = 0; i < static_cast<int>(list_R.size()); i++) {
-          double d = list_R[i].head<2>().norm();
-          if (d < bd) {
-            bd = d;
-            bi = i;
-          }
-        }
-        if (bi >= 0) {
-          const double yf2 = tools::limit_rad(truth.yaw + truth.w * (T + 0.50));
-          double td = 1e18;
-          for (int i = 0; i < truth.n; i++) {
-            td = std::min(td, (truth.plate_xyz_at(yf2, i) - list_R[bi].head<3>()).norm());
-          }
-          r.aim_err_red = td;
-        }
-      }
+      // ---- 真值与 EKF 状态向量的差距 ----
+      r.yaw_err = tools::limit_rad(x[9] - truth.yaw);
+      r.w_err = x[10] - truth.w;
+      r.center_err = std::hypot(x[0] - truth.C.x(), x[3] - truth.C.y());
+      r.r_err = x[11] - truth.r;
     }
 
     recs.push_back(r);
@@ -654,10 +586,12 @@ int main(int argc, char ** argv)
       j["truth_y"] = truth.C.y();
       j["r"] = r.r;
       j["truth_r"] = truth.r;
-      if (!std::isnan(r.aim_err)) j["aim_err_cm"] = r.aim_err * 100.0;
-      if (!std::isnan(r.aim_err_red)) j["aim_err_red_cm"] = r.aim_err_red * 100.0;
-      if (r.aim_state_id >= 0) j["aim_state_id"] = r.aim_state_id;
-      if (r.aim_true_id >= 0) j["aim_true_id"] = r.aim_true_id;
+      if (!std::isnan(r.yaw_err)) {
+        j["yaw_err_deg"] = r.yaw_err * RAD2DEG;
+        j["w_err"] = r.w_err;
+        j["center_err_cm"] = r.center_err * 100.0;
+        j["r_err_cm"] = r.r_err * 100.0;
+      }
       if (!std::isnan(r.in_az)) {
         j["in_az_deg"] = r.in_az * RAD2DEG;
         j["in_pitch_deg"] = r.in_pitch * RAD2DEG;
@@ -724,14 +658,6 @@ int main(int argc, char ** argv)
           if (best) cv::line(img, c, *best, {0, 255, 255}, 1);
         }
       }
-      // 瞄准点：红
-      if (!std::isnan(r.aim_err)) {
-        auto pts = solver.reproject_armor(aim_pred, aim_yaw, armor_type, armor_name);
-        auto c = plate_center(pts);
-        tools::draw_point(img, cv::Point(cvRound(c.x), cvRound(c.y)), {0, 0, 255}, 5);
-        for (auto & p : pts) tools::draw_point(img, p, {0, 0, 255}, 1);
-      }
-
       // 以真实装甲板中心裁剪 640x480（等效 2.25x 放大），文字画在裁剪图上
       cv::Point2f cc(0, 0);
       for (auto & q : tcenters) cc += q;
@@ -745,13 +671,12 @@ int main(int argc, char ** argv)
         crop,
         fmt::format("t={:.2f}s  w={:.2f}  nobs={}  {}", t, r.w, r.nobs, r.dark ? "DARK" : ""),
         {12, 26}, {220, 230, 255}, 0.7, 2);
-      if (!std::isnan(r.aim_err)) {
-        tools::draw_text(
-          crop,
-          fmt::format(
-            "aim_err={:.1f}cm   green=est  blue=truth  red=aim", r.aim_err * 100.0),
-          {12, 52}, {150, 210, 255}, 0.55, 1);
-      }
+      tools::draw_text(
+        crop,
+        fmt::format(
+          "green=est  blue=truth   yaw_err={:+.2f}deg  center_err={:.1f}cm", r.yaw_err * RAD2DEG,
+          r.center_err * 100.0),
+        {12, 52}, {150, 210, 255}, 0.55, 1);
 
       std::vector<uint8_t> jpg;
       std::vector<int> params{cv::IMWRITE_JPEG_QUALITY, 75};
@@ -764,8 +689,12 @@ int main(int argc, char ** argv)
   session.close();
 
   // ---------------- 汇总 ----------------
-  std::vector<double> tw, wv, ae, aer, inn_az, inn_pitch, inn_dist, inn_yaw, in_az, in_pitch,
-    in_dist, in_yaw;
+  std::vector<double> tw, wv, inn_az, inn_pitch, inn_dist, inn_yaw, in_az, in_pitch, in_dist,
+    in_yaw;
+  // 状态向量差距：全部 / 打灭帧 / 非打灭帧
+  std::vector<double> all_yaw, all_w, all_c, all_r;
+  std::vector<double> dk_yaw, dk_w, dk_c, dk_r;
+  std::vector<double> lt_yaw, lt_w, lt_c, lt_r;
   int n_dark = 0, n_stats = 0;
   double w_first = 0, w_last = 0;
   int n_first = 0, n_last = 0;
@@ -784,8 +713,20 @@ int main(int argc, char ** argv)
       n_last++;
     }
     if (r.dark) n_dark++;
-    if (!std::isnan(r.aim_err)) ae.push_back(r.aim_err);
-    if (!std::isnan(r.aim_err_red)) aer.push_back(r.aim_err_red);
+    if (!std::isnan(r.yaw_err)) {
+      all_yaw.push_back(r.yaw_err);
+      all_w.push_back(r.w_err);
+      all_c.push_back(r.center_err);
+      all_r.push_back(r.r_err);
+      auto & vy = r.dark ? dk_yaw : lt_yaw;
+      auto & vw = r.dark ? dk_w : lt_w;
+      auto & vc = r.dark ? dk_c : lt_c;
+      auto & vr = r.dark ? dk_r : lt_r;
+      vy.push_back(r.yaw_err);
+      vw.push_back(r.w_err);
+      vc.push_back(r.center_err);
+      vr.push_back(r.r_err);
+    }
     if (!std::isnan(r.inn_az)) {
       inn_az.push_back(r.inn_az);
       inn_pitch.push_back(r.inn_pitch);
@@ -807,34 +748,61 @@ int main(int argc, char ** argv)
   }
   const double w_drift = (n_first && n_last) ? (w_first / n_first - w_last / n_last) : NAN;
   const double w_detr = detrended_std(tw, wv);
-  int hits = 0;
-  for (double e : ae) hits += (e < 0.0675) ? 1 : 0;
+
+  auto mean_abs = [](const std::vector<double> & v) -> double {
+    if (v.empty()) return NAN;
+    double s = 0.0;
+    for (double x : v) s += std::abs(x);
+    return s / v.size();
+  };
+  auto pct_abs = [](std::vector<double> v, double p) -> double {
+    if (v.empty()) return NAN;
+    for (double & x : v) x = std::abs(x);
+    return pct_of(v, p);
+  };
 
   fmt::print(
     "\n================ sim summary ================\n"
     "config        : {}\n"
     "preset        : {}   seed={}\n"
-    "truth         : w={:.3f} rad/s  r={:.3f} m  |C|={:.3f} m\n"
+    "truth         : w={:.3f} rad/s  r={:.3f} m  init_r={:.3f} m  |C|={:.3f} m\n"
     "dark          : {}  period={:.3f}s  frames={}  events={}  dark_rate={:.1f}%\n"
     "obs count     : 0:{} 1:{} 2:{} 3:{} 4:{}\n"
     "stats window  : [{:.1f}, {:.1f}] s  n={}\n"
     "w             : mean={:.4f} std={:.4f} detrended_std={:.4f}\n"
-    "w drift       : first2s-last2s = {:+.4f} rad/s\n"
-    "aim_err_fly   : mean={:.2f}cm p95={:.2f}cm max={:.2f}cm  hit(<6.75cm)={:.1f}%\n"
-    "aim_err_red   : mean={:.2f}cm p95={:.2f}cm max={:.2f}cm\n"
+    "w drift       : first2s-last2s = {:+.4f} rad/s\n",
+    cfg_path, args.preset, args.seed, args.w, args.radius, init_radius, args.dist,
+    args.dark ? "on" : "off",
+    args.dark_period, args.dark_frames > 0 ? std::to_string(args.dark_frames) : std::string("10~12"),
+    dark_events, args.dark ? 100.0 * n_dark / std::max(1, n_stats) : 0.0, obs_hist[0], obs_hist[1],
+    obs_hist[2], obs_hist[3], obs_hist[4], args.stats_from, t_end, n_stats, w_mean, w_std, w_detr,
+    w_drift);
+
+  fmt::print(
+    "\nstate gap (truth vs EKF)   {:>8s} {:>8s} {:>8s}\n"
+    "  |yaw_err|   mean (deg)   {:8.3f} {:8.3f} {:8.3f}\n"
+    "  |yaw_err|   p95  (deg)   {:8.3f} {:8.3f} {:8.3f}\n"
+    "  |center_err| mean (cm)   {:8.3f} {:8.3f} {:8.3f}\n"
+    "  |center_err| p95  (cm)   {:8.3f} {:8.3f} {:8.3f}\n"
+    "  |w_err|     mean (rad/s) {:8.4f} {:8.4f} {:8.4f}\n"
+    "  |r_err|     mean (cm)    {:8.3f} {:8.3f} {:8.3f}\n"
+    "  frames                   {:8d} {:8d} {:8d}\n",
+    "all", "dark", "light", mean_abs(all_yaw) * RAD2DEG, mean_abs(dk_yaw) * RAD2DEG,
+    mean_abs(lt_yaw) * RAD2DEG, pct_abs(all_yaw, 0.95) * RAD2DEG,
+    pct_abs(dk_yaw, 0.95) * RAD2DEG, pct_abs(lt_yaw, 0.95) * RAD2DEG, mean_abs(all_c) * 100,
+    mean_abs(dk_c) * 100, mean_abs(lt_c) * 100, pct_abs(all_c, 0.95) * 100,
+    pct_abs(dk_c, 0.95) * 100, pct_abs(lt_c, 0.95) * 100, mean_abs(all_w), mean_abs(dk_w),
+    mean_abs(lt_w), mean_abs(all_r) * 100, mean_abs(dk_r) * 100, mean_abs(lt_r) * 100,
+    static_cast<int>(all_yaw.size()), static_cast<int>(dk_yaw.size()),
+    static_cast<int>(lt_yaw.size()));
+
+  fmt::print(
     "input bias    : az={:+.4f} pitch={:+.4f} dist={:+.4f}cm yaw={:+.4f} deg\n"
     "innovation    : az={:+.4f} pitch={:+.4f} dist={:+.4f}cm yaw={:+.4f} deg   (n={})\n"
     "                                  (az/pitch/yaw 单位 deg, dist 单位 cm)\n",
-    cfg_path, args.preset, args.seed, args.w, args.radius, args.dist, args.dark ? "on" : "off",
-    args.dark_period, args.dark_frames > 0 ? std::to_string(args.dark_frames) : std::string("4~6"),
-    dark_events, args.dark ? 100.0 * n_dark / std::max(1, n_stats) : 0.0, obs_hist[0], obs_hist[1],
-    obs_hist[2], obs_hist[3], obs_hist[4], args.stats_from, t_end, n_stats, w_mean, w_std, w_detr,
-    w_drift, mean_of(ae) * 100, pct_of(ae, 0.95) * 100, pct_of(ae, 1.0) * 100,
-    ae.empty() ? 0.0 : 100.0 * hits / ae.size(), mean_of(aer) * 100, pct_of(aer, 0.95) * 100,
-    pct_of(aer, 1.0) * 100, mean_of(in_az) * RAD2DEG, mean_of(in_pitch) * RAD2DEG,
-    mean_of(in_dist) * 100, mean_of(in_yaw) * RAD2DEG, mean_of(inn_az) * RAD2DEG,
-    mean_of(inn_pitch) * RAD2DEG, mean_of(inn_dist) * 100, mean_of(inn_yaw) * RAD2DEG,
-    inn_az.size());
+    mean_of(in_az) * RAD2DEG, mean_of(in_pitch) * RAD2DEG, mean_of(in_dist) * 100,
+    mean_of(in_yaw) * RAD2DEG, mean_of(inn_az) * RAD2DEG, mean_of(inn_pitch) * RAD2DEG,
+    mean_of(inn_dist) * 100, mean_of(inn_yaw) * RAD2DEG, inn_az.size());
 
   // 重命名 rlog 为可读名字
   auto after = list_rlogs(out_dir);

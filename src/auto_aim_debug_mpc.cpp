@@ -83,6 +83,8 @@ int main(int argc, char * argv[])
       //data["target_yaw"] = plan.target_yaw;
       //data["target_pitch"] = plan.target_pitch;
 
+      // data["target_pitch"]=solver.R_gimbal2world();
+
       data["plan_yaw"] = plan.yaw;
       data["plan_yaw_vel"] = plan.yaw_vel;
       data["plan_yaw_acc"] = plan.yaw_acc;
@@ -93,7 +95,7 @@ int main(int argc, char * argv[])
 
       data["plan_pitch0"] = plan.pitch0;
       data["plan_yaw0"] = plan.yaw0;
-      data["111111111111111"]=yp_error;
+      data["yp_error"]=yp_error;
 
       data["fire"] = fire ? 1 : 0;
       data["fired"] = fired ? 1 : 0;
@@ -121,6 +123,8 @@ int main(int argc, char * argv[])
             data["obs_pitch"] = a.ypd_in_world[1];     // z[1]
             data["obs_dist"] = a.ypd_in_world[2];      // z[2]
             data["obs_armor_yaw"] = a.ypr_in_world[0]; // z[3]
+            data["obs_z_in_gimbal"]=a.xyz_in_gimbal[2];
+            data["obs_z_in_world"]=a.xyz_in_world[2];
             break;
           }
         }
@@ -149,6 +153,10 @@ int main(int argc, char * argv[])
     auto q = gimbal.q(t);
     solver.set_R_gimbal2world(q);
     armors = yolo.detect(img);
+
+    // 调试用：无论检测到什么装甲板，统一按 three 处理
+    for (auto & armor : armors) armor.name = auto_aim::ArmorName::three;
+
     auto targets = tracker.track(armors, t);
     if (!targets.empty())
       target_queue.push(targets.front());
